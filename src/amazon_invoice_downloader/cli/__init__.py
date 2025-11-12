@@ -370,7 +370,8 @@ def run(playwright, args):
                 if first_page:
                     first_page = False
                 else:
-                    page.get_by_role("link", name="Next →").click()
+                    print("Navigating to next page...")
+                    page.locator("ul.a-pagination li.a-last a", has_text="Next").click(timeout=1000)
                 sleep()  # sleep after every page load
             except TimeoutError:
                 # There are no more pages
