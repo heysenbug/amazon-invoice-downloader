@@ -9,7 +9,8 @@ Usage:
   amazon-invoice-downloader.py \
     [--email=<email> --password=<password>] \
     [--year=<YYYY> | --date-range=<YYYYMMDD-YYYYMMDD>] \
-    [--url=<url>]
+    [--url=<url>] \
+    [--type=<type>]
   amazon-invoice-downloader.py (-h | --help)
   amazon-invoice-downloader.py (-v | --version)
 
@@ -17,6 +18,8 @@ Login Options:
   --email=<email>          Amazon login email  [default: $AMAZON_EMAIL].
   --password=<password>    Amazon login password  [default: $AMAZON_PASSWORD].
   --url=<url>              Amazon URL to use (e.g., https://www.amazon.com/)  [default: $AMAZON_URL].
+  --type=<type>            Amazon invoice type (invoice or summary)  [default: $AMAZON_INVOICE].
+                           Alternate method will be fallback if provided type is not found.
 
 Date Range Options:
   --date-range=<YYYYMMDD-YYYYMMDD>  Start and end date range
@@ -28,7 +31,7 @@ Options:
 
 Examples:
   amazon-invoice-downloader.py --year=2022  # Uses .env file or env vars $AMAZON_EMAIL and $AMAZON_PASSWORD
-  amazon-invoice-downloader.py --date-range=20220101-20221231
+  amazon-invoice-downloader.py --date-range=20220101-20221231 --type=summary
   amazon-invoice-downloader.py --email=user@example.com --password=secret  # Defaults to current year
   amazon-invoice-downloader.py --email=user@example.com --password=secret --year=2022 --url=https://www.amazon.ca/
   amazon-invoice-downloader.py --email=user@example.com --password=secret --date-range=20220101-20221231
@@ -39,16 +42,18 @@ Features:
   - Stealth mode enabled to avoid detection
 
 Credential Precedence:
-  1. Command line arguments (--email, --password)
-  2. Environment variables ($AMAZON_EMAIL, $AMAZON_PASSWORD, $AMAZON_URL)
+  1. Command line arguments (--email, --password, --url, --type)
+  2. Environment variables ($AMAZON_EMAIL, $AMAZON_PASSWORD, $AMAZON_URL, $AMAZON_INVOICE)
   3. .env file (automatically loaded if env vars not set)
 """
 
 import os
 import random
+import re
 import sys
 import time
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -58,6 +63,14 @@ from playwright.sync_api import TimeoutError, sync_playwright
 from playwright_stealth import Stealth
 
 from ..__about__ import __version__
+
+cards = ['all']
+
+
+class ret(Enum):
+    SUCCESS = 0
+    FAILURE = 1
+    SKIPPED = 2
 
 
 def load_env_if_needed():
@@ -107,6 +120,102 @@ def get_order_id(spans):
     return "unknown_order_id"
 
 
+def get_last_four(page):
+    # Get last four digits of payment card
+    elem = page.get_by_test_id("method-details-number")
+    try:
+        return elem.nth(0).inner_text(timeout=500).strip()
+    except Exception:
+        pass
+    # Test the alternative selector
+    elem = page.locator('[data-pmts-component-id^="pp-"]')
+    try:
+        last_four = elem.nth(0).text_content(timeout=500).strip()
+        match = re.search(r'\d{4}', last_four)
+        if match:
+            return match.group(0)
+    except Exception:
+        pass
+    # Last shot is the match by text
+    elem = page.locator("span", has_text=re.compile(r"ending in \d{4}"))
+    try:
+        for i in range(elem.count()):
+            match = re.search(r'\d{4}', elem.nth(i).inner_text())
+            if match:
+                return match.group(0)
+    except Exception:
+        pass
+    # Check if payment details are out of date
+    elem = page.get_by_text("Unable to display payment details")
+    try:
+        if elem.count() > 0:
+            return "unknown"
+    except Exception:
+        pass
+    print("No last four digits found.")
+    return "none"
+
+
+def download_invoice(context, page, url, order_card, file_name):
+    # Placeholder for future invoice type handling
+    order_card.query_selector('xpath=.//a[contains(normalize-space(), "Invoice")]').click()
+
+    # Wait for the popover dialog and get its Invoice href
+    popover = page.locator('div.a-popover[role="dialog"][aria-modal="true"][aria-hidden="false"]')
+    popover.wait_for(state="visible")
+
+    invoice_link = popover.get_by_role("link", name="Invoice", exact=True)
+    href = invoice_link.get_attribute("href")
+    link = urljoin(url, href)
+    # Save
+    invoice_page = context.new_page()
+    resp = invoice_page.request.get(link)
+    ct = (resp.headers.get("content-type") or "").lower()
+    if "pdf" not in ct or not resp.ok:
+        print(f"Download failed: {resp.status} {resp.status_text}, content-type: {ct}")
+        invoice_page.close()
+        return ret.FAILURE
+    Path(file_name).write_bytes(resp.body())
+    invoice_page.close()
+
+    return ret.SUCCESS
+
+
+def download_summary(context, page, url, order_card, file_name):
+    # Placeholder for future invoice type handling
+    order_card.query_selector('xpath=.//a[contains(normalize-space(), "Invoice")]').click()
+
+    # Wait for the popover dialog and get its Invoice href
+    popover = page.locator('div.a-popover[role="dialog"][aria-modal="true"][aria-hidden="false"]')
+    popover.wait_for(state="visible")
+
+    invoice_link = popover.get_by_role("link", name="Printable Order Summary", exact=True)
+    href = invoice_link.get_attribute("href")
+    link = urljoin(url, href)
+    # Navigate to link
+    summary_page = context.new_page()
+    summary_page.goto(link)
+    summary_page.wait_for_load_state("domcontentloaded")
+    # Get last four digits of payment card
+    last_four = 'all'
+    if last_four not in cards:
+        last_four = get_last_four(summary_page)
+    # Find Print button
+    if last_four in cards:
+        summary_page.pdf(
+            path=file_name,
+            format="Letter",
+            margin={"top": ".5in", "right": ".5in", "bottom": ".5in", "left": ".5in"},
+        )
+    else:
+        print(f"Skipping download for card ending in {last_four}")
+        summary_page.close()
+        return ret.SKIPPED
+
+    summary_page.close()
+    return ret.SUCCESS
+
+
 def run(playwright, args):
     email = args.get("--email")
     if email == "$AMAZON_EMAIL":
@@ -119,6 +228,18 @@ def run(playwright, args):
     url = args.get("--url")
     if url == "$AMAZON_URL":
         url = os.environ.get("AMAZON_URL") or "https://www.amazon.com/"
+
+    invoice_type = args.get("--type")
+    if invoice_type == "$AMAZON_INVOICE":
+        invoice_type = os.environ.get("AMAZON_INVOICE") or "invoice"
+    # Initialize invoice download method and fallback
+    download_method = []
+    if invoice_type.lower() == "invoice":
+        download_method.append(download_invoice)
+        download_method.append(download_summary)
+    elif invoice_type.lower() == "summary":
+        download_method.append(download_summary)
+        download_method.append(download_invoice)
 
     # Parse date ranges int start_date and end_date
     if args["--date-range"]:
@@ -282,27 +403,17 @@ def run(playwright, args):
                 if os.path.isfile(file_name):
                     print(f"File [{file_name}] already exists")
                 else:
-                    print(f"Saving file [{file_name}]")
                     # Click the "Invoice" link inside the card
-                    order_card.query_selector('xpath=.//a[contains(normalize-space(), "Invoice")]').click()
-
-                    # Wait for the popover dialog and get its Invoice href
-                    popover = page.locator('div.a-popover[role="dialog"][aria-modal="true"][aria-hidden="false"]')
-                    popover.wait_for(state="visible")
-
-                    invoice_link = popover.get_by_role("link", name="Invoice", exact=True)
-                    href = invoice_link.get_attribute("href")
-                    link = urljoin(url, href)
-                    # Save
-                    invoice_page = context.new_page()
-                    resp = invoice_page.request.get(link)
-                    ct = (resp.headers.get("content-type") or "").lower()
-                    if "pdf" not in ct or not resp.ok:
-                        print(f"Download failed: {resp.status} {resp.status_text}, content-type: {ct}")
-                        invoice_page.close()
-                        continue
-                    Path(file_name).write_bytes(resp.body())
-                    invoice_page.close()
+                    for method in download_method:
+                        try:
+                            ret = method(context, page, url, order_card, file_name)
+                            if ret == ret.SUCCESS:
+                                print(f"✅ Successfully downloaded [{file_name}]")
+                                break
+                            elif ret == ret.SKIPPED:
+                                break
+                        except Exception as e:
+                            print(f"Error downloading [{file_name}]: {e}")
 
     # Close the browser
     context.close()
