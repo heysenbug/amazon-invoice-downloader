@@ -8,13 +8,15 @@ Amazon Invoice Downloader
 Usage:
   amazon-invoice-downloader.py \
     [--email=<email> --password=<password>] \
-    [--year=<YYYY> | --date-range=<YYYYMMDD-YYYYMMDD>]
+    [--year=<YYYY> | --date-range=<YYYYMMDD-YYYYMMDD>] \
+    [--url=<url>]
   amazon-invoice-downloader.py (-h | --help)
   amazon-invoice-downloader.py (-v | --version)
 
 Login Options:
   --email=<email>          Amazon login email  [default: $AMAZON_EMAIL].
   --password=<password>    Amazon login password  [default: $AMAZON_PASSWORD].
+  --url=<url>              Amazon URL to use (e.g., https://www.amazon.com/)  [default: $AMAZON_URL].
 
 Date Range Options:
   --date-range=<YYYYMMDD-YYYYMMDD>  Start and end date range
@@ -28,7 +30,7 @@ Examples:
   amazon-invoice-downloader.py --year=2022  # Uses .env file or env vars $AMAZON_EMAIL and $AMAZON_PASSWORD
   amazon-invoice-downloader.py --date-range=20220101-20221231
   amazon-invoice-downloader.py --email=user@example.com --password=secret  # Defaults to current year
-  amazon-invoice-downloader.py --email=user@example.com --password=secret --year=2022
+  amazon-invoice-downloader.py --email=user@example.com --password=secret --year=2022 --url=https://www.amazon.ca/
   amazon-invoice-downloader.py --email=user@example.com --password=secret --date-range=20220101-20221231
 
 Features:
@@ -38,7 +40,7 @@ Features:
 
 Credential Precedence:
   1. Command line arguments (--email, --password)
-  2. Environment variables ($AMAZON_EMAIL, $AMAZON_PASSWORD)
+  2. Environment variables ($AMAZON_EMAIL, $AMAZON_PASSWORD, $AMAZON_URL)
   3. .env file (automatically loaded if env vars not set)
 """
 
@@ -48,6 +50,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urljoin
 
 from docopt import docopt
 from dotenv import load_dotenv
@@ -102,6 +105,10 @@ def run(playwright, args):
     password = args.get("--password")
     if password == "$AMAZON_PASSWORD":
         password = os.environ.get("AMAZON_PASSWORD")
+
+    url = args.get("--url")
+    if url == "$AMAZON_URL":
+        url = os.environ.get("AMAZON_URL") or "https://www.amazon.com/"
 
     # Parse date ranges int start_date and end_date
     if args["--date-range"]:
@@ -167,7 +174,7 @@ def run(playwright, args):
     Stealth().apply_stealth_sync(page)
 
     # Wait for page to fully load
-    page.goto("https://amazon.com/")
+    page.goto(url)
     page.wait_for_load_state("domcontentloaded")
 
     # Check if we're on the less fully featured page
@@ -266,17 +273,25 @@ def run(playwright, args):
                     print(f"File [{file_name}] already exists")
                 else:
                     print(f"Saving file [{file_name}]")
+                    # Click the "Invoice" link inside the card
+                    order_card.query_selector('xpath=.//a[contains(normalize-space(), "Invoice")]').click()
+
+                    # Wait for the popover dialog and get its Invoice href
+                    popover = page.locator('div.a-popover[role="dialog"][aria-modal="true"][aria-hidden="false"]')
+                    popover.wait_for(state="visible")
+
+                    invoice_link = popover.get_by_role("link", name="Invoice", exact=True)
+                    href = invoice_link.get_attribute("href")
+                    link = urljoin(url, href)
                     # Save
-                    link = "https://www.amazon.com/" + order_card.query_selector(
-                        'xpath=//a[contains(text(), "View invoice")]'
-                    ).get_attribute("href")
                     invoice_page = context.new_page()
-                    invoice_page.goto(link)
-                    invoice_page.pdf(
-                        path=file_name,
-                        format="Letter",
-                        margin={"top": ".5in", "right": ".5in", "bottom": ".5in", "left": ".5in"},
-                    )
+                    resp = invoice_page.request.get(link)
+                    ct = (resp.headers.get("content-type") or "").lower()
+                    if "pdf" not in ct or not resp.ok:
+                        print(f"Download failed: {resp.status} {resp.status_text}, content-type: {ct}")
+                        invoice_page.close()
+                        continue
+                    Path(file_name).write_bytes(resp.body())
                     invoice_page.close()
 
     # Close the browser
