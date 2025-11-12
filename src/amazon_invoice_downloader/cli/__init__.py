@@ -97,6 +97,16 @@ def sleep():
     time.sleep(sleep_time)
 
 
+def get_order_id(spans):
+    # Attempt to find the order ID from the spans
+    # Order ID is usually in a span following "Order #" span
+    for i in range(len(spans)):
+        text = spans[i].inner_text().strip()
+        if text.lower().startswith("order #"):
+            return spans[i + 1].inner_text().strip()
+    return "unknown_order_id"
+
+
 def run(playwright, args):
     email = args.get("--email")
     if email == "$AMAZON_EMAIL":
@@ -259,8 +269,8 @@ def run(playwright, args):
 
                 date = datetime.strptime(spans[1].inner_text(), "%B %d, %Y")
                 total = spans[3].inner_text().replace("$", "").replace(",", "")  # remove dollar sign and commas
-                orderid = spans[8].inner_text()
-                date_str = date.strftime("%Y%m%d")
+                orderid = get_order_id(spans)
+                date_str = date.strftime("%Y-%m-%d")
                 file_name = f"{target_dir}/{date_str}_{total}_amazon_{orderid}.pdf"
 
                 if date > end_date:
