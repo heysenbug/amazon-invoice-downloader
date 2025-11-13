@@ -43,3 +43,6 @@ downloads/
 htmlcov/
 *.bak
 reference
+
+# Debug stuff
+*.log
