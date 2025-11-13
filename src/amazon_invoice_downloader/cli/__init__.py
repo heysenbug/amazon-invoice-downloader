@@ -208,7 +208,7 @@ def download_summary(context, page, url, order_card, file_name):
             margin={"top": ".5in", "right": ".5in", "bottom": ".5in", "left": ".5in"},
         )
     else:
-        print(f"Skipping download for card ending in {last_four}")
+        print(f"Skipping download for {os.path.basename(file_name)} with last four digits {last_four}")
         summary_page.close()
         return ret.SKIPPED
 
@@ -402,19 +402,19 @@ def run(playwright, args):
                     break
 
                 if os.path.isfile(file_name):
-                    print(f"File [{file_name}] already exists")
+                    print(f"File [{os.path.basename(file_name)}] already exists")
                 else:
                     # Click the "Invoice" link inside the card
                     for method in download_method:
                         try:
                             ret = method(context, page, url, order_card, file_name)
                             if ret == ret.SUCCESS:
-                                print(f"✅ Successfully downloaded [{file_name}]")
+                                print(f"✅ Successfully downloaded [{os.path.basename(file_name)}]")
                                 break
                             elif ret == ret.SKIPPED:
                                 break
                         except Exception as e:
-                            print(f"Error downloading [{file_name}]: {e}")
+                            print(f"Error downloading [{os.path.basename(file_name)}]: {e}")
 
     # Close the browser
     context.close()
