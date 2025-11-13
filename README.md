@@ -29,6 +29,13 @@ This program automates downloading Amazon purchase invoices using [Playwright](h
 
 **Date Range**: Use `--year=<YYYY>` or `--date-range=<YYYYMMDD-YYYYMMDD>`. Defaults to current year.
 
+**URL**: User `--url=<amazon_url>` or `$AMAZON_URL` env variable. `https://amazon.com/` if not set.
+
+**Invoice Type** (non-specified type will be used as fallback):
+Set through the `--type=<type>` option. Possible types are `invoice` (default) and `summary`.
+`invoice` downloads the first available invoice on the order.
+`summary` downloads the printable order summary.
+
 **Output**: PDFs saved to `./downloads/` as `YYYYMMDD_<total>_amazon_<orderid>.pdf`. Existing files are skipped.
 
 **Features**:
@@ -124,15 +131,20 @@ $ amazon-invoice-downloader -h
 Amazon Invoice Downloader
 
 Usage:
-  amazon-invoice-downloader \
+  amazon-invoice-downloader.py \
     [--email=<email> --password=<password>] \
-    [--year=<YYYY> | --date-range=<YYYYMMDD-YYYYMMDD>]
-  amazon-invoice-downloader (-h | --help)
-  amazon-invoice-downloader (-v | --version)
+    [--year=<YYYY> | --date-range=<YYYYMMDD-YYYYMMDD>] \
+    [--url=<url>] \
+    [--type=<type>]
+  amazon-invoice-downloader.py (-h | --help)
+  amazon-invoice-downloader.py (-v | --version)
 
 Login Options:
   --email=<email>          Amazon login email  [default: $AMAZON_EMAIL].
   --password=<password>    Amazon login password  [default: $AMAZON_PASSWORD].
+  --url=<url>              Amazon URL to use (e.g., https://www.amazon.com/)  [default: $AMAZON_URL].
+  --type=<type>            Amazon invoice type (invoice or summary)  [default: $AMAZON_INVOICE].
+                           Alternate method will be fallback if provided type is not found.
 
 Date Range Options:
   --date-range=<YYYYMMDD-YYYYMMDD>  Start and end date range
@@ -142,22 +154,22 @@ Options:
   -h --help                Show this screen.
   -v --version             Show version.
 
+Examples:
+  amazon-invoice-downloader.py --year=2022  # Uses .env file or env vars $AMAZON_EMAIL and $AMAZON_PASSWORD
+  amazon-invoice-downloader.py --date-range=20220101-20221231 --type=summary
+  amazon-invoice-downloader.py --email=user@example.com --password=secret  # Defaults to current year
+  amazon-invoice-downloader.py --email=user@example.com --password=secret --year=2022 --url=https://www.amazon.ca/
+  amazon-invoice-downloader.py --email=user@example.com --password=secret --date-range=20220101-20221231
+
 Features:
   - Remote debugging enabled on port 9222 for AI MCP Servers
   - Virtual authenticator configured to prevent passkey dialogs
   - Stealth mode enabled to avoid detection
 
 Credential Precedence:
-  1. Command line arguments (--email, --password)
-  2. Environment variables ($AMAZON_EMAIL, $AMAZON_PASSWORD)
+  1. Command line arguments (--email, --password, --url, --type)
+  2. Environment variables ($AMAZON_EMAIL, $AMAZON_PASSWORD, $AMAZON_URL, $AMAZON_INVOICE)
   3. .env file (automatically loaded if env vars not set)
-
-Examples:
-  amazon-invoice-downloader --year=2022  # Uses .env file or env vars $AMAZON_EMAIL and $AMAZON_PASSWORD
-  amazon-invoice-downloader --date-range=20220101-20221231
-  amazon-invoice-downloader --email=user@example.com --password=secret  # Defaults to current year
-  amazon-invoice-downloader --email=user@example.com --password=secret --year=2022
-  amazon-invoice-downloader --email=user@example.com --password=secret --date-range=20220101-20221231
 ```
 
 ## AI Assistant Integration & Debugging
